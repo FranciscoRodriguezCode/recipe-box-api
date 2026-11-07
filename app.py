@@ -8,7 +8,7 @@ That is the point: you will add both, lesson by lesson, in Units 2 and 3.
 import sqlite3
 
 from flask import Flask, g, jsonify, request
-
+from werkzeug.security import generate_password_hash, check_password_hash
 DATABASE = "recipes.db"
 
 app = Flask(__name__)
@@ -127,6 +127,51 @@ def delete_recipe(recipe_id):
         return jsonify({"error": "recipe not found"}), 404
     return "", 204
 
+@app.post("/register")
+def register():
+    data = request.get_json(silent=True)
+    
+    #1. Basic validation
+    if (
+        not data
+        or not data.get("username")
+        or not data.get("email")
+        or not data.get("password")
+    ):
+        return jsonify({"error": "username, email, and password are required"}), 400
+        
+    db = get_db()
+    
+    # 2. Hash the password
+    password_hash = generate_password_hash(data["password"])
+    
+    try:
+        # 3. Insert user with parametrized query
+        cur = db.execute(
+            """
+            INSERT INTO users (username, email, password_hash, created_at)
+            VALUES (?, ?, ?, datetime('now'))
+            """,
+            (data["username"], data["email"], password_hash),
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        # 4. Duplicate username or email
+        return jsonify({"error": "username or email already exists"}), 409
+        
+    row = db.execute(
+        "SELECT id, username, email, created_at FROM users WHERE id = ?", (cur.lastrowid,),).fetchone()
+        
+    return (
+        jsonify({
+            "id": row["id"],
+            "username": row["username"],
+            "email": row["email"],
+            "created_at": row["created_at"],
+            }
+        ),
+        201,
+    )
 
 if __name__ == "__main__":
     app.run(debug=True)
