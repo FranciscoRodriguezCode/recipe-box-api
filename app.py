@@ -173,5 +173,36 @@ def register():
         201,
     )
 
+@app.post("/login")
+def login():
+    data = request.get_json() or {}
+
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return {"error": "username and passwords are required"}, 400
+
+    db = get_db()
+    cursor = db.execute(
+        "SELECT id, username, password_hash FROM users WHERE username = ?",
+        (username,),
+    )
+    user = cursor.fetchone()
+
+    # Generic 401 response (same for unknown user or wrong password)
+    invalid_response = ({"error": "invalid credentials"}, 401)
+
+    if user is None:
+        return invalid_response
+
+    if not check_password_hash(user["password_hash"], password):
+        return invalid_response
+
+    return {
+        "id": user["id"],
+        "username": user["username"],
+    }, 200
+    
 if __name__ == "__main__":
     app.run(debug=True)
