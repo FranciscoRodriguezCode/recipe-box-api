@@ -10,7 +10,7 @@ import jwt
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import os
-from flask import Flask, g, jsonify, request
+from flask import Flask, g, jsonify, request, current_app
 from werkzeug.security import generate_password_hash, check_password_hash
 DATABASE = "recipes.db"
 load_dotenv()
@@ -64,8 +64,34 @@ def get_recipe(recipe_id):
     return jsonify(recipe_to_dict(row))
 
 
+
 @app.post("/recipes")
 def create_recipe():
+    # 1) Read Authorization header
+    auth_header = request.headers.get("Authorization", "")
+
+    # 2) Require Bearer format
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Authorization header with Bearer token required"}), 401
+
+    # 3) Extract the raw token string
+    token = auth_header.split(" ", 1)[1].strip()
+
+    # 4) VERIFY the token signature and extract identity
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=["HS256"],
+        )
+    except jwt.InvalidTokenError:
+        return jsonify({"error": "invalid token"}), 401
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        return jsonify({"error": "invalid token"}), 401
+
+    # (we're not using user_id yet for ownership, just proving identity)
     data = request.get_json(silent=True)
     if not data or not data.get("title") or not data.get("ingredients"):
         return jsonify({"error": "title and ingredients are required"}), 400
@@ -92,6 +118,21 @@ def create_recipe():
 
 @app.patch("/recipes/<int:recipe_id>")
 def update_recipe(recipe_id):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Authorization header with Bearer token required"}), 401
+
+    token = auth_header.split(" ", 1)[1].strip()
+
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.InvalidTokenError:
+        return jsonify({"error": "invalid token"}), 401
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        return jsonify({"error": "invalid token"}), 401
+
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "a JSON body is required"}), 400
@@ -124,6 +165,23 @@ def update_recipe(recipe_id):
 
 @app.delete("/recipes/<int:recipe_id>")
 def delete_recipe(recipe_id):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Authorization header with Bearer token required"}), 401
+
+    token = auth_header.split(" ", 1)[1].strip()
+
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        return jsonify({"error": "token expired, please log in again"}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({"error": "invalid token"}), 401
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        return jsonify({"error": "invalid token"}), 401
+
     db = get_db()
     cur = db.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     db.commit()
