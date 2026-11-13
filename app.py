@@ -98,13 +98,14 @@ def create_recipe():
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO recipes (title, ingredients, instructions, is_public)"
-            " VALUES (?, ?, ?, ?)",
+            "INSERT INTO recipes (title, ingredients, instructions, is_public, owner_id)"
+            " VALUES (?, ?, ?, ?, ?)",
             (
                 data["title"],
                 data["ingredients"],
                 data.get("instructions", ""),
                 1 if data.get("is_public", True) else 0,
+                user_id,  # from the verified token
             ),
         )
         db.commit()
@@ -130,6 +131,7 @@ def update_recipe(recipe_id):
         return jsonify({"error": "invalid token"}), 401
 
     user_id = payload.get("sub")
+    user_role = payload.get("role")
     if user_id is None:
         return jsonify({"error": "invalid token"}), 401
 
@@ -148,6 +150,22 @@ def update_recipe(recipe_id):
         return jsonify({"error": "nothing to update"}), 400
     values.append(recipe_id)
     db = get_db()
+
+    # 1) Load the recipe
+    row = db.execute(
+        "SELECT * FROM recipes WHERE id = ?", (recipe_id,)
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "recipe not found"}), 404
+
+    # 2) Enforce ownership
+    is_owner = (row["owner_id"] == user_id)
+    is_admin = (user_role == "admin")
+    
+    if not (is_owner or is_admin):
+        return jsonify({"error": "forbidden"}), 403
+
+    # 3) Now it's safe to update
     try:
         cur = db.execute(
             f"UPDATE recipes SET {', '.join(fields)} WHERE id = ?", values
@@ -155,8 +173,7 @@ def update_recipe(recipe_id):
         db.commit()
     except sqlite3.IntegrityError:
         return jsonify({"error": "a recipe with that title already exists"}), 409
-    if cur.rowcount == 0:
-        return jsonify({"error": "recipe not found"}), 404
+
     row = db.execute(
         "SELECT * FROM recipes WHERE id = ?", (recipe_id,)
     ).fetchone()
@@ -179,14 +196,29 @@ def delete_recipe(recipe_id):
         return jsonify({"error": "invalid token"}), 401
 
     user_id = payload.get("sub")
+    user_role = payload.get("role")
     if user_id is None:
         return jsonify({"error": "invalid token"}), 401
 
     db = get_db()
-    cur = db.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
-    db.commit()
-    if cur.rowcount == 0:
+
+    # 1) Load the recipe
+    row = db.execute(
+        "SELECT * FROM recipes WHERE id = ?", (recipe_id,)
+    ).fetchone()
+    if row is None:
         return jsonify({"error": "recipe not found"}), 404
+
+    # 2) Enforce ownership
+    is_owner = (row["owner_id"] == user_id)
+    is_admin = (user_role == "admin")
+
+    if not (is_owner or is_admin):
+        return jsonify({"error": "forbidden"}), 403
+
+    # 3) Now it's safe to delete
+    db.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+    db.commit()
     return "", 204
 
 @app.post("/register")
@@ -247,9 +279,10 @@ def login():
 
     db = get_db()
     cursor = db.execute(
-        "SELECT id, username, password_hash FROM users WHERE username = ?",
-        (username,),
+        "SELECT id, username, password_hash, role FROM users WHERE username = ?",
+    (username,),
     )
+
     user = cursor.fetchone()
 
     # Generic 401 response (same for unknown user or wrong password)
@@ -262,9 +295,9 @@ def login():
         return invalid_response
 
     payload = {
-        "sub": str(user["id"]), # subject must be a string
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-        
+    "sub": str(user["id"]),  # subject must be a string
+    "role": user["role"],
+    "exp": datetime.now(timezone.utc) + timedelta(hours=1),
     }
 
     token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")   
