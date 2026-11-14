@@ -70,6 +70,7 @@ def recipe_to_dict(row):
         "ingredients": row["ingredients"],
         "instructions": row["instructions"],
         "is_public": bool(row["is_public"]),
+        "owner_id": row["owner_id"],
     }
 
 
@@ -148,26 +149,12 @@ def create_recipe():
 
 
 @app.patch("/recipes/<int:recipe_id>")
+@require_auth
 def update_recipe(recipe_id):
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return jsonify({"error": "Authorization header with Bearer token required"}), 401
-
-    token = auth_header.split(" ", 1)[1].strip()
-
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-    except jwt.InvalidTokenError:
-        return jsonify({"error": "invalid token"}), 401
-
-    user_id = payload.get("sub")
-    user_role = payload.get("role")
-    if user_id is None:
-        return jsonify({"error": "invalid token"}), 401
-
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "a JSON body is required"}), 400
+    
     fields, values = [], []
     for column in ("title", "ingredients", "instructions"):
         if column in data:
@@ -178,27 +165,34 @@ def update_recipe(recipe_id):
         values.append(1 if data["is_public"] else 0)
     if not fields:
         return jsonify({"error": "nothing to update"}), 400
-    values.append(recipe_id)
+
     db = get_db()
 
-    # 1) Load the recipe
     row = db.execute(
         "SELECT * FROM recipes WHERE id = ?", (recipe_id,)
     ).fetchone()
     if row is None:
         return jsonify({"error": "recipe not found"}), 404
 
-    # 2) Enforce ownership
+    user_id = g.current_user_id
+    user_role = g.current_user_role
+
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid token"}), 401
+
     is_owner = (row["owner_id"] == user_id)
     is_admin = (user_role == "admin")
-    
+
     if not (is_owner or is_admin):
         return jsonify({"error": "forbidden"}), 403
 
-    # 3) Now it's safe to update
+    values.append(recipe_id)
     try:
-        cur = db.execute(
-            f"UPDATE recipes SET {', '.join(fields)} WHERE id = ?", values
+        db.execute(
+            f"UPDATE recipes SET {', '.join(fields)} WHERE id = ?",
+            values,
         )
         db.commit()
     except sqlite3.IntegrityError:
@@ -207,8 +201,7 @@ def update_recipe(recipe_id):
     row = db.execute(
         "SELECT * FROM recipes WHERE id = ?", (recipe_id,)
     ).fetchone()
-    return jsonify(recipe_to_dict(row))
-
+    return jsonify(recipe_to_dict(row)), 200
 
 @app.delete("/recipes/<int:recipe_id>")
 @require_auth
