@@ -32,3 +32,28 @@
   - 204: No Content if successful with ownership + JWT check
   - 403: Forbidden if user not allowed to delete
   - 404: Not Found if recipe doesn’t exist
+
+## Target package layout (plan only, not implemented yet)
+
+- wsgi.py                # entry point to run the app
+- requirements.txt
+- .env
+- .env.example
+- instance/
+  - recipes.db           # SQLite database (ignored by Git)
+
+- app/                   # main application package
+  - __init__.py          # app creation, registering blueprints, loading config
+  - config.py            # configuration classes and environment settings
+  - db.py                # database connection helper(s)
+  - models.py            # data models / row helpers (if any)
+  - middleware.py        # before_request and other middleware
+  - auth/
+    - __init__.py
+    - routes.py          # register/login endpoints
+    - services.py        # password hashing, JWT encode/decode
+  - recipes/
+    - __init__.py
+    - routes.py          # recipe CRUD endpoints
+    - services.py        # recipe business rules, ownership checks
+  - errors.py            # error handlers (e.g. 400/401/403/404)g
